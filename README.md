@@ -4,7 +4,7 @@ Internet-enabled Analog Clock using ESP8266 and ATtiny85
 ### Description
 This is version 3 of my [ESPClock](https://www.randseq.org/2016/10/hacking-analog-clock-to-sync-with-ntp.html) project.
 
-The clock gets accurate time information from the Internet, makes sure the physical clock time is up-to-date. It also automatically detects your current timezone via browser geolocation and deals with daylight saving adjustments with no user intervention.
+The clock gets accurate time information from the Internet and makes sure the physical clock time is up-to-date. It also automatically detects your current timezone via browser geolocation and deals with daylight saving adjustments with no user intervention.
 
 V1 uses the ESP-12E development board to drive a cheap $2 Ikea analog clock.
 
