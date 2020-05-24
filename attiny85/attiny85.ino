@@ -246,7 +246,7 @@ void setup() {
 
   // Enable pin change interrupt for PCINT1 (PB6)
   // Global pin change interrupt will be enabled when clock is started
-  PCMSK |= (1 << PCINT1); // 
+  PCMSK |= (1 << PCINT1);
 
   // Watchdog timer triggers every 8s to measure VCC
   MCUSR &= ~bit(WDRF);
