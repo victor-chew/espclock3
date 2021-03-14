@@ -1,5 +1,5 @@
 /*
- * attiny85.ino
+ * attiny85.cpp
  *
  * Copyright 2020 Victor Chew
  *
@@ -9,24 +9,26 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
+ * Unle_SS required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either expre_SS or implied.
+ * See the License for the specific language governing permi_SSions and
  * limitations under the License.
  */
 
+#include <Arduino.h>
+#include <Wire.h>
 #include <limits.h>
 #include <avr/io.h>
 #include <avr/wdt.h>
 #include <avr/sleep.h>
+#include <avr/power.h>
 #include <avr/interrupt.h>
 #include <EEPROM.h>
-#include <Wire.h>
 
-#define HH 0
-#define MM 1
-#define SS 2
+#define _HH 0
+#define _MM 1
+#define _SS 2
 
 #define I2C_SLAVE_ADDR 0x12
 #define CMD_START_CLOCK 0x2
@@ -35,45 +37,37 @@
 #define CMD_SET_NETTIME 0x8
 
 #define SQW_PIN PB1
-#define VCC_THRESHOLD 2800
 #define PULSE_WIDTH 40
 
-bool clock_running = false, hibernate = false;
-byte tickpin = PB3, clocktime[3]; // physical clock time
-uint16_t vcc = 3300;
+bool clock_running = false;
+byte tickpin = PB3, prev_net_ss = 255;
 
 // Variables used by ISRs must be marked as volatile
-volatile bool check_vcc = false;
-volatile byte nettime[3]; // network clock time
-volatile byte msg[5];
+volatile bool check_hibernate = false;
+volatile byte numticks = 0;
+volatile byte clocktime[3] = {0}; // physical clock time
+volatile byte nettime[3] = {0};   // network clock time
+volatile byte msg[5] = {0};
 
-//#define BT_DEBUG
-#ifdef BT_DEBUG
-#include <SendOnlySoftwareSerial.h>
-SendOnlySoftwareSerial btserial(PB4);
-void debug(const char *format, ...) {
-  char msg[128];
-  va_list ap;
-  va_start(ap, format);
-  vsnprintf(msg, sizeof(msg), format, ap);
-  va_end(ap);
-  btserial.print(msg);
-  btserial.flush();
-}
-#endif
+// Function prototypes
+static void incTime(volatile byte& hh, volatile byte& mm, volatile byte& ss);
+static void processMessage();
+static void enablePinChangeInterrupt(bool enable);
+static void writeEEPROM();
 
-// Triggers every ~8s to check VCC level
+// Triggers every ~8s to check whether we should save status and hibernate
 ISR(WDT_vect) {
-  check_vcc = true;
+  check_hibernate = true;
 }
 
 // Pin change interrupt; respond to falling edge of 1Hz clock signal connected to PB1
 ISR(PCINT0_vect) {
-  if (digitalRead(SQW_PIN) == LOW) incClockTime(nettime[HH], nettime[MM], nettime[SS]);
+  if (digitalRead(SQW_PIN) == LOW) numticks += 1;
 }
 
-void receiveEvent(uint8_t numbytes) {
-  if (numbytes > sizeof(msg)) return; // Sanity check
+// Process messages from master
+void receiveEvent(int numbytes) {
+  if (numbytes > (int)sizeof(msg)) return; // Sanity check
   int idx = 0;
   while(idx < numbytes) {
     if (Wire.available()) msg[idx++] = Wire.read();
@@ -87,18 +81,20 @@ void processMessage() {
   switch(msg[0]) {
     case CMD_START_CLOCK:
       clock_running = true;
+      prev_net_ss = 255;
       enablePinChangeInterrupt(true);
       break;
     case CMD_STOP_CLOCK:
       clock_running = false;
       enablePinChangeInterrupt(false);
+      writeEEPROM();
       break;
     case CMD_SET_CLOCK:
-      memcpy(clocktime, msg+1, sizeof(clocktime));
-      memcpy(nettime, clocktime, sizeof(nettime));
+      memcpy(clocktime, (void*)(msg+1), sizeof(clocktime));
+      memcpy((void*)nettime, clocktime, sizeof(nettime));
       break;
     case CMD_SET_NETTIME:
-      memcpy(nettime, msg+1, sizeof(nettime));
+      memcpy((void*)nettime, (void*)(msg+1), sizeof(nettime));
       break;
   }
 }
@@ -108,7 +104,7 @@ void enablePinChangeInterrupt(bool enable) {
   else GIMSK &= ~bit(PCIE);
 }
 
-void incClockTime(volatile byte& hh, volatile byte& mm, volatile byte& ss) {
+void incTime(volatile byte& hh, volatile byte& mm, volatile byte& ss) {
   if (++ss >= 60) {
     ss = 0;
     if (++mm >= 60) {
@@ -122,34 +118,28 @@ void incClockTime(volatile byte& hh, volatile byte& mm, volatile byte& ss) {
 
 // Move second hand one tick clockwise.
 // See: http://www.cibomahto.com/2008/03/controlling-a-clock-with-an-arduino/
-// PB3 and PB4 are connected to twin wires on clock via 100ohm resistors
 void incSecondHand() {
-  incClockTime(clocktime[HH], clocktime[MM], clocktime[SS]);
-#ifdef BT_DEBUG
-#else
+  incTime(clocktime[_HH], clocktime[_MM], clocktime[_SS]);
   digitalWrite(tickpin, HIGH);
   delay(PULSE_WIDTH);
   digitalWrite(tickpin, LOW);
   tickpin = (tickpin == PB3) ? PB4 : PB3;
-#endif
 }
 
 // Pulse the same pin, which will cause the second hand to vibrate but not advance.
 // This lets the user know the clock is waiting for network time to catch up.
 void pulseSecondHand() {
-#ifdef BT_DEBUG
-#else
   digitalWrite(tickpin, HIGH);
   delay(PULSE_WIDTH);
   digitalWrite(tickpin, LOW);
-#endif
 }
 
 // If clock time != network time, adjust until they match (returns false)
 // Otherwise put MCU to sleep (returns true).
 bool synchronizeClock() {
   // Calculate time difference between physical clock and network time in seconds
-  long diff = ((clocktime[HH] * 3600L) + (clocktime[MM] * 60L) + clocktime[SS]) - ((nettime[HH] * 3600L) + (nettime[MM] * 60L) + nettime[SS]);
+  long diff = ((clocktime[_HH] * 3600L) + (clocktime[_MM] * 60L) + clocktime[_SS]) -
+              ((nettime[_HH] * 3600L) + (nettime[_MM] * 60L) + nettime[_SS]);
   if (diff == 0) return true;
   if (diff < 0) diff = (12L*60*60) + diff;
 
@@ -158,21 +148,21 @@ bool synchronizeClock() {
     pulseSecondHand();
     return true;
   }
-  
+
   // Otherwise, fast-forward clock and try to catch up
   incSecondHand();
-  if (memcmp(clocktime, nettime, sizeof(clocktime)) == 0) return true;
+  if (memcmp(clocktime, (const void*)nettime, sizeof(clocktime)) == 0) return true;
 
   // Additional delay between clock ticks during fast-forwarding to prevent slippage
   delay(PULSE_WIDTH*2);
   return false;
 }
 
-// EEPROM: HH MM SS TICKPIN CHECKSUM
-// CHECKSUM = 0xCC ^ HH ^ MM ^ SS ^ TICKPIN
+// EEPROM: _HH MM _SS TICKPIN CHECKSUM
+// CHECKSUM = 0xCC ^ _HH ^ MM ^ _SS ^ TICKPIN
 void readEEPROM() {
   byte checksum = 0xCC, buf[4];
-  for (int i=0; i<sizeof(buf); i++) {
+  for (unsigned int i=0; i<sizeof(buf); i++) {
     buf[i] = EEPROM.read(i);
     checksum ^= buf[i];
   }
@@ -181,57 +171,30 @@ void readEEPROM() {
   // Good checksum; use values in EEPROM
   if (checksum == checksum2) {
     memcpy(clocktime, buf, sizeof(clocktime));
-    memcpy(nettime, buf, sizeof(nettime));
+    memcpy((void*)nettime, buf, sizeof(nettime));
     tickpin = buf[3];
   } 
   // Bad checksum; use default values
   else {
     memset(clocktime, 0, sizeof(clocktime));
-    memset(nettime, 0, sizeof(nettime));
+    memset((void*)nettime, 0, sizeof(nettime));
     tickpin = PB3;
   }
 }
 
 void writeEEPROM() {
-  byte checksum = 0xCC ^ clocktime[HH] ^ clocktime[MM] ^ clocktime[SS] ^ tickpin;
-  byte buf[] = { clocktime[HH], clocktime[MM], clocktime[SS], tickpin, checksum }; 
-  for (int i=0; i<sizeof(buf); i++) EEPROM.write(i, buf[i]);
-}
-
-void checkLowVoltage() {
-  // Initialize ADC to measure VCC using interal 1.1V bandgap as reference
-  check_vcc = false;
-  ADMUX = bit(MUX3) | bit(MUX2); 
-  delay(1); // Wait for bandgap voltage to settle
-  ADCSRA = bit(ADEN) | bit(ADSC) | bit(ADPS2) | bit(ADPS1) | bit(ADPS0);
-  while (bit_is_set(ADCSRA, ADSC));
-  vcc = (1.1*1024*1000L) / ADC; // Compute VCC (in mV)
-  ADCSRA = 0; // Turn off ADC to save power
-
-  // Stop clock and save state to EEPROM when VCC is too low
-  if (vcc < VCC_THRESHOLD) {
-    if (!hibernate) {
-      hibernate = true;
-      writeEEPROM();
-    }
-  } else {
-    hibernate = false;
-  }
+  byte checksum = 0xCC ^ clocktime[_HH] ^ clocktime[_MM] ^ clocktime[_SS] ^ tickpin;
+  byte buf[] = { clocktime[_HH], clocktime[_MM], clocktime[_SS], tickpin, checksum }; 
+  for (unsigned int i=0; i<sizeof(buf); i++) EEPROM.write(i, buf[i]);
 }
 
 void setup() {
-#ifdef BT_DEBUG
-  btserial.begin(9600);
-#else
-  pinMode(PB3, OUTPUT); digitalWrite(PB3, LOW);
-  pinMode(PB4, OUTPUT); digitalWrite(PB4, LOW);
-#endif
-
   // Initialization
   pinMode(SQW_PIN, INPUT_PULLUP);
-  memset(clocktime, 0, sizeof(clocktime));
-  memset(nettime, 0, sizeof(nettime));
-  memset(msg, 0, sizeof(msg));
+
+  // Turn off ADC to save power during sleep
+  ADCSRA &= ~bit(ADEN);
+  power_adc_disable(); 
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
 
@@ -244,11 +207,11 @@ void setup() {
   Wire.begin(I2C_SLAVE_ADDR);
   Wire.onReceive(receiveEvent);
 
-  // Enable pin change interrupt for PCINT1 (PB6)
+  // Enable pin change interrupt for PCINT1 (PB6) to process clock signal from RTC
   // Global pin change interrupt will be enabled when clock is started
   PCMSK |= (1 << PCINT1);
 
-  // Watchdog timer triggers every 8s to measure VCC
+  // Watchdog timer triggers every 8s to check if we should hibernate
   MCUSR &= ~bit(WDRF);
   WDTCR |= bit(WDCE) | bit(WDE);
   WDTCR = bit(WDIE) | bit(WDP3) | bit(WDP0);
@@ -257,21 +220,25 @@ void setup() {
 }
 
 void loop() {
-#ifdef BT_DEBUG
-  debug("VCC=%d, CVCC=%d, MSG=%d:%d:%d:%d:%d\n", 
-    vcc, check_vcc, msg[0], msg[1], msg[2], msg[3], msg[4]);
-  debug("HB=%d, CR=%d, CT=%d:%d:%d, NT=%d:%d:%d\n", 
-    hibernate, clock_running, 
-    clocktime[HH], clocktime[MM], clocktime[SS],
-    nettime[HH], nettime[MM], nettime[SS]); 
-#endif
-  
-  // Monitor VCC every 8s. If VCC is low, save clock state and put MCU to sleep.
-  if (check_vcc) checkLowVoltage();
+  // Increment net time by accumulated number of ticks
+  for (int i=0; i<numticks; i++) incTime(nettime[_HH], nettime[_MM], nettime[_SS]);
+  numticks = 0;
 
-  // Power down if 1) clocking is not running, or 2) physical clock is already in sync with network clock.
+  // Go into hibernation if clock time (seconds) is not being incremented.
+  // This indicates that the RTC has been powered down.
+  if (check_hibernate) {
+    if (clock_running && prev_net_ss == nettime[_SS]) {
+      msg[0] = CMD_STOP_CLOCK;
+      processMessage();
+    }
+    prev_net_ss = nettime[_SS];
+    check_hibernate = false;
+  }
+
+  // Continue running without sleeping if we are trying to sync physical clock with network clock.
   bool sleep = true;
-  if (clock_running && !hibernate) sleep = synchronizeClock();
+  if (clock_running) sleep = synchronizeClock();
+
   if (sleep) {
     sleep_cpu();
     // There is something I don't understand here. If this small delay is not present, it seems
