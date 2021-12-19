@@ -10,7 +10,7 @@ V1 uses the ESP-12E development board to drive a cheap $2 Ikea analog clock.
 
 V2 uses the WeMOS D1 Mini and ATtiny85 to reduce power draw. That design yields a runtime of ~1 month.
 
-V3 uses the ESP-07, ATtiny85 and PCF8563 RTC to reduce the power draw even further. This design yields at least 4 months of runtime on a set of readily-available 4 x 1.2V NiMH rechargables.
+V3 uses the ESP-07, ATtiny85 and PCF8563 RTC to reduce the power draw even further. This design yields at least 4 months of runtime on a set of readily-available 4 x 1.2V AA NiMH rechargables.
 
 ### Links:
 * [Design](https://www.randseq.org/2020/05/espclock3-final-version.html)
