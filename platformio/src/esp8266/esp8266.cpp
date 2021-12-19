@@ -26,7 +26,7 @@
 #include <ESP8266HTTPClient.h>
 #include <Rtc_Pcf8563.h> // https://github.com/elpaso/Rtc_Pcf8563
 
-//#define DEBUG
+#define DEBUG
 #ifdef DEBUG
 #include <Syslog.h>
 WiFiUDP udpClient;
@@ -394,7 +394,7 @@ void setup() {
   if (I2C_Scan() != 2) {
     I2C_ClearBus();
     delay(1000);
-    ESP.deepSleep(1*60*60*1e6, WAKE_RF_DEFAULT);
+    ESP.deepSleep(5*60*1e6, WAKE_RF_DEFAULT);
     while(true);
   }
   
@@ -406,6 +406,12 @@ void setup() {
     delay(1000);
     ESP.deepSleep(0);
   }
+
+  // Read ATtiny85 heartbeat
+  byte hb[3] = { 0 };
+  Wire.requestFrom(I2C_SLAVE_ADDR, sizeof(hb));
+  int numbytes = Wire.readBytes(hb, sizeof(hb));
+  syslog.logf(LOG_INFO, "Heartbeat: [%d] %02d:%02d:%02d", numbytes, hb[0], hb[1], hb[2]);
 
   // Enable 1HZ clock output signal on RTC
   rtc.setSquareWave(SQW_1HZ);

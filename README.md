@@ -1,4 +1,4 @@
-# espclock3
+# ESPCLOCK3
 Internet-enabled Analog Clock using ESP8266 and ATtiny85
 
 ### Description

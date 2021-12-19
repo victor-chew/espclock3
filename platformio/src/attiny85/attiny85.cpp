@@ -188,6 +188,10 @@ void writeEEPROM() {
   for (unsigned int i=0; i<sizeof(buf); i++) EEPROM.write(i, buf[i]);
 }
 
+void requestEvent() {
+  for (int i=0; i<3; i++) Wire.write(clocktime[i]);
+}
+
 void setup() {
   // Initialization
   pinMode(SQW_PIN, INPUT_PULLUP);
@@ -206,6 +210,7 @@ void setup() {
   // Setup as I2C slave
   Wire.begin(I2C_SLAVE_ADDR);
   Wire.onReceive(receiveEvent);
+  Wire.onRequest(requestEvent);
 
   // Enable pin change interrupt for PCINT1 (PB6) to process clock signal from RTC
   // Global pin change interrupt will be enabled when clock is started
